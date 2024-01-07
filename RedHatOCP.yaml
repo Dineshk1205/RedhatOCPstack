@@ -1,0 +1,245 @@
+heat_template_version: 2013-05-23
+description: >
+ RedHat Openshift Cluster(OCP) Deployment on Openstack Cloud
+ Maintainer DineshReddy kayithi
+
+parameters:
+  DEPLOYMENT_INSTANCE_KEY_NAME:
+    type: string
+    description: Select key-pair 
+    constraints:
+      - custom_constraint: nova.keypair
+        description: Must name a public key (pair) known to Nova
+  DEPLOYMENT_INSTANCE_FLAVOR:
+    type: string
+    description: Select Medium Flavor for Deploying the Deployment Instance
+    default: m1.medium
+    constraints:
+      - custom_constraint: nova.flavor
+        description: Select Flavor
+  DEPLOYMENT_INSTANCE_IMAGE:
+    type: string
+    description: >
+      Select Image to deploy the ocpdeployment instance
+    default: Centos9
+    constraints:
+      - custom_constraint: glance.image
+        description: Select CentOS/RHEL OS  Image
+  DEPLOYMENT_INSTANCE_NETWORK:
+    type: string
+    constraints:
+      - custom_constraint: neutron.network
+        description: Select Network 
+  DEPLOYMENT_INSTANCE_OCP_USER_PASSWORD:
+    type: string
+    description: Instance ocp deployment OCP User Password 
+    hidden: <true | false>         
+  OPENSTACK_AUTH_URL:
+    type: string
+    description: Enter OPENSTACK Cloud Dashboard URL ex:- http://172.16.25.122:5000/v3
+    default: http://x.x.x.x:5000/v3
+  OPENSTACK_PROJECT_NAME:
+    type: string
+    description: Enter Openstack Project  Name
+    default: admin
+  OPENSTACK_USER_NAME:
+    type: string
+    description: Enter Openstack Cloud User  Name
+    default: admin
+  OPENSTACK_USER_PASSWORD:
+    type: string
+    description: Enter Openstack Cloud User  Password 
+    hidden: <true | false>
+  OPENSTACK_USER_DOMAIN_NAME:
+    type: string
+    description: Enter Openstack User  Domain Name 
+    default: Default
+  OPENSTACK_PROJECT_DOMAIN_NAME:
+    type: string
+    description: Enter openstack Project  Domain Name 
+    default: Default
+  OCP_VERSION:
+    type: string
+    description: Select Redhat Openshift Version
+    default: 4.14
+    constraints:
+      - allowed_values: 
+        -  4.14
+        -  4.13
+ 
+  BASE_DOMAIN:
+    type: string
+    description: Enter Base Domian Name 
+  OCP_MASTER_NODES_FLAVOR:
+    type: string
+    description: Select Flavor ,Minimum 4VcpuS,16GB Ram and 100Gb storage
+    default: m1.xlarge 
+  OCP_WORKER_NODES_FLAVOR:
+    type: string
+    description: Select Flavor ,Minimum 2VCPUS,8GB Ram and 100Gb storage
+    default: m1.large 
+  OCP_CLUSTER_NAME:
+    type: string
+    description: Enter OCP cluster name
+  OCP_WORKER_NODES_COUNT:
+    type: string
+    description: Number Of OCP Worker Nodes 
+    default: 3
+  OCP_CLUSTER_NETWORK:
+    type: string
+    description: Enter ocp cluster network
+    default: 10.128.0.0/14
+  OCP_MACHINE_NETWORK:
+    type: string
+    description: Enter ocp machine network
+    default: 10.0.0.0/16
+  OCP_SERVICE_NETWORK:
+    type: string
+    description: Enter OCP Service network
+    default: 172.30.0.0/16
+  OCP_NETWORK_TYPE:
+    type: string
+    description: OCP CNI (Container Network Interface) Network Type
+    default: OVNKubernetes
+    constraints:
+      - allowed_values: 
+        -  OVNKubernetes
+        -  OpenShiftSDN
+  OCP_EXTERNAL_NETWORK:
+    type: string
+    description: Enter Openstack Cloud External/Provider Network name 
+    default: external  
+  OCP_API_FLOATING_IP:
+    type: string
+    description: FLoating IP - This DNS A/AAAA or CNAME record must point to the load balancer for the control plane machines. This record must be resolvable by both clients external to the cluster and from all the nodes within the cluster. 
+  OCP_INGRESS_FLOATING_IP:
+    type: string
+    description: FLoating IP - A wildcard DNS A/AAAA or CNAME record that points to the load balancer that targets the machines that run the Ingress router pods, which are the worker nodes by default. This record must be resolvable by both clients external to the cluster and from all the nodes within the cluster.
+  OCP_PULL_SECRET:
+    type: string
+    description: Paste Openshift Pull Secret Key 
+    hidden: <true | false>
+  OCP_SSH_KEY:
+    type: string
+    description: Paste SSH Public Key .
+    hidden: <true | false>
+resources:
+  ocp_instance:
+    type: OS::Nova::Server
+    properties:
+      name: ocpdeploy
+      key_name: {get_param: DEPLOYMENT_INSTANCE_KEY_NAME}
+      image: {get_param: DEPLOYMENT_INSTANCE_IMAGE}
+      flavor: {get_param: DEPLOYMENT_INSTANCE_FLAVOR}
+      networks: [{network: {get_param: DEPLOYMENT_INSTANCE_NETWORK} }] 
+      user_data_format: RAW
+      user_data: 
+        str_replace:
+          template: |
+            #cloud-config
+            user: ocp
+            password: $DEPLOYMENT_INSTANCE_OCP_USER_PASSWORD
+            groups: users,wheel
+            chpasswd: {expire: False}
+            ssh_pwauth: True
+            packages:
+            - unzip
+            - wget
+            - curl
+            write_files:
+              - path: /root/scripts/ocp.sh
+                content: |
+                  #!/bin/bash
+                  mkdir ocp
+                  cd ocp/
+                  tee -a /ocp/clouds.yaml << EOF
+                  clouds:
+                    openstack:
+                      auth:
+                        auth_url: $OPENSTACK_AUTH_URL
+                        project_name: $OPENSTACK_PROJECT_NAME
+                        username: $OPENSTACK_USER_NAME
+                        password: $OPENSTACK_USER_PASSWORD
+                        user_domain_name: $OPENSTACK_USER_DOMAIN_NAME
+                        project_domain_name: $OPENSTACK_PROJECT_DOMAIN_NAME
+                  EOF
+
+                  curl "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable-$OCP_VERSION/openshift-install-linux.tar.gz" | tar xz -C /tmp
+                  mv /tmp/openshift-install /usr/bin 
+                  curl "https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable-$OCP_VERSION/openshift-client-linux.tar.gz" | tar xz -C /tmp
+                  mv /tmp/oc /usr/bin 
+                  mv /tmp/kubectl /usr/bin
+                  mkdir -p $HOME/.cache
+                  export XDG_CACHE_HOME="$HOME/.cache"
+                  tee -a /ocp/install-config.yaml << EOF
+                  apiVersion: v1
+                  baseDomain: $BASE_DOMAIN
+                  controlPlane:
+                    name: master
+                    platform: 
+                      openstack: 
+                        type: $OCP_MASTER_NODES_FLAVOR
+                    replicas: 3
+                  compute:
+                  - name: worker
+                    platform:
+                      openstack:
+                        type: $OCP_WORKER_NODES_FLAVOR
+                    replicas: $OCP_WORKER_NODES_COUNT
+                  metadata:
+                    name: $OCP_CLUSTER_NAME
+                  networking:
+                    clusterNetwork:
+                    - cidr: $OCP_CLUSTER_NETWORK
+                      hostPrefix: 23
+                    machineNetwork:
+                    - cidr: $OCP_MACHINE_NETWORK
+                    serviceNetwork:
+                    - $OCP_SERVICE_NETWORK
+                    networkType: $OCP_NETWORK_TYPE
+                  platform:
+                    openstack:
+                      cloud: openstack
+                      externalNetwork: $OCP_EXTERNAL_NETWORK
+                      apiFloatingIP: $OCP_API_FLOATING_IP
+                      ingressFloatingIP: $OCP_INGRESS_FLOATING_IP    
+                  fips: false
+                  pullSecret: '$OCP_PULL_SECRET'
+                  sshKey: $OCP_SSH_KEY
+                  EOF
+                  cp install-config.yaml  install-config.yaml.backup
+                  openshift-install create cluster --log-level=info 
+                  tail -f /var/log/cloud-init-output.log
+     
+                permissions: '0755'
+            runcmd:
+              - [ sh, "/root/scripts/ocp.sh" ] 
+    
+          params:
+            $OCP_VERSION: {get_param: OCP_VERSION}
+            $BASE_DOMAIN: {get_param: BASE_DOMAIN}
+            $DEPLOYMENT_INSTANCE_OCP_USER_PASSWORD: {get_param: DEPLOYMENT_INSTANCE_OCP_USER_PASSWORD}
+            $OCP_MASTER_NODES_FLAVOR: {get_param: OCP_MASTER_NODES_FLAVOR}
+            $OCP_WORKER_NODES_FLAVOR: {get_param: OCP_WORKER_NODES_FLAVOR}
+            $OCP_CLUSTER_NAME:  {get_param: OCP_CLUSTER_NAME}
+            $OCP_CLUSTER_NETWORK: {get_param: OCP_CLUSTER_NETWORK}
+            $OCP_MACHINE_NETWORK: {get_param: OCP_MACHINE_NETWORK}
+            $OCP_SERVICE_NETWORK: {get_param: OCP_SERVICE_NETWORK}
+            $OCP_NETWORK_TYPE: {get_param: OCP_NETWORK_TYPE}
+            $OCP_EXTERNAL_NETWORK: {get_param: OCP_EXTERNAL_NETWORK}
+            $OCP_API_FLOATING_IP: {get_param: OCP_API_FLOATING_IP}
+            $OCP_INGRESS_FLOATING_IP: {get_param: OCP_INGRESS_FLOATING_IP}
+            $OCP_PULL_SECRET: {get_param: OCP_PULL_SECRET}
+            $OCP_SSH_KEY: {get_param: OCP_SSH_KEY}
+            $OCP_WORKER_NODES_COUNT: {get_param: OCP_WORKER_NODES_COUNT}
+            $OPENSTACK_AUTH_URL: {get_param: OPENSTACK_AUTH_URL}
+            $OPENSTACK_PROJECT_NAME: {get_param: OPENSTACK_PROJECT_NAME}
+            $OPENSTACK_USER_NAME: {get_param: OPENSTACK_USER_NAME}
+            $OPENSTACK_USER_PASSWORD: {get_param: OPENSTACK_USER_PASSWORD}
+            $OPENSTACK_USER_DOMAIN_NAME: {get_param: OPENSTACK_USER_DOMAIN_NAME}
+            $OPENSTACK_PROJECT_DOMAIN_NAME: {get_param: OPENSTACK_PROJECT_DOMAIN_NAME}
+
+outputs:
+  instance_networks:
+    description: The IP addresses of the OCP Deployed instance
+    value: { get_attr: [ocp_instance, networks] }
